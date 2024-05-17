@@ -1,38 +1,49 @@
-#!/usr/bin/env python3
-'''A module with tools for request caching and tracking.
-'''
-import redis
 import requests
+import redis
 from functools import wraps
-from typing import Callable
+import time
 
+# Initialize Redis client
+cache = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
-redis_store = redis.Redis()
-'''The module-level Redis instance.
-'''
+def cache_page(func):
+    @wraps(func)
+    def wrapper(url):
+        # Cache key for the content and count
+        content_key = f"content:{url}"
+        count_key = f"count:{url}"
+        
+        # Increment the access count
+        cache.incr(count_key)
+        
+        # Check if the content is cached
+        cached_content = cache.get(content_key)
+        if cached_content:
+            print("Returning cached content")
+            return cached_content
+        
+        # If not cached, fetch the content using the original function
+        print("Fetching new content")
+        content = func(url)
+        
+        # Cache the content with an expiration time of 10 seconds
+        cache.setex(content_key, 10, content)
+        
+        return content
+    return wrapper
 
-
-def data_cacher(method: Callable) -> Callable:
-    '''Caches the output of fetched data.
-    '''
-    @wraps(method)
-    def invoker(url) -> str:
-        '''The wrapper function for caching the output.
-        '''
-        redis_store.incr(f'count:{url}')
-        result = redis_store.get(f'result:{url}')
-        if result:
-            return result.decode('utf-8')
-        result = method(url)
-        redis_store.set(f'count:{url}', 0)
-        redis_store.setex(f'result:{url}', 10, result)
-        return result
-    return invoker
-
-
-@data_cacher
+@cache_page
 def get_page(url: str) -> str:
-    '''Returns the content of a URL after caching the request's response,
-    and tracking the request.
-    '''
-    return requests.get(url).text
+    response = requests.get(url)
+    return response.text
+
+if __name__ == "__main__":
+    test_url = "http://slowwly.robertomurray.co.uk/delay/5000/url/http://www.google.com"
+    
+    # Fetch the page twice to see caching in action
+    print(get_page(test_url))
+    time.sleep(5)  # Sleep for 5 seconds (less than cache expiry time)
+    print(get_page(test_url))
+    time.sleep(10)  # Sleep for 10 seconds (more than cache expiry time)
+    print(get_page(test_url))
+
